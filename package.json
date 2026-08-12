@@ -1,0 +1,26 @@
+{
+  "name": "big-brain",
+  "version": "0.1.0",
+  "description": "Personal AI orchestration CLI and MCP harness.",
+  "type": "module",
+  "bin": {
+    "bb": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test dist/**/*.test.js",
+    "bb": "npm run build --silent && node dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2"
+  }
+}
