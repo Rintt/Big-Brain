@@ -1,0 +1,13 @@
+{
+  "projectName": "youtuber",
+  "configVersion": 1,
+  "bigBrainVersion": "0.1.0",
+  "createdAt": "2026-08-12T10:55:10.803Z",
+  "defaultModel": "gpt-5.5",
+  "paths": {
+    "database": ".big-brain/big-brain.sqlite",
+    "runs": ".big-brain/runs",
+    "artifacts": ".big-brain/artifacts",
+    "docs": ".big-brain/docs"
+  }
+}

@@ -7,6 +7,7 @@ export type InitProjectOptions = {
     name: string;
     force?: boolean;
     now?: Date;
+    dockerBuild?: () => Promise<void>;
 };
 export type InitProjectResult = {
     created: boolean;

@@ -7,12 +7,25 @@ export const BIG_BRAIN_DIR = ".big-brain";
 export const CONFIG_FILE = "config.json";
 export const DB_FILE = "big-brain.sqlite";
 export const CONFIG_VERSION = 1;
+const DEFAULT_DOCKERFILE = `FROM node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1000 agent \
+  && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh agent
+
+WORKDIR /workspace
+USER agent
+`;
 
 export type InitProjectOptions = {
   cwd: string;
   name: string;
   force?: boolean;
   now?: Date;
+  dockerBuild?: () => Promise<void>;
 };
 
 export type InitProjectResult = {
@@ -45,6 +58,7 @@ export async function initProject(options: InitProjectOptions): Promise<InitProj
   await mkdir(path.join(projectDir, "runs"), { recursive: true });
   await mkdir(path.join(projectDir, "artifacts"), { recursive: true });
   await mkdir(path.join(projectDir, "docs"), { recursive: true });
+  await mkdir(path.join(projectDir, "sandbox"), { recursive: true });
 
   const packageVersion = await readPackageVersion();
   const createdAt = (options.now ?? new Date()).toISOString();
@@ -63,7 +77,19 @@ export async function initProject(options: InitProjectOptions): Promise<InitProj
   };
 
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await writeFile(path.join(projectDir, "sandbox", "Dockerfile"), DEFAULT_DOCKERFILE, "utf8");
   initDatabase({ databasePath, projectName: options.name, createdAt });
+
+  if (options.dockerBuild) {
+    try {
+      await options.dockerBuild();
+    } catch (error) {
+      throw new Error(
+        `Docker build failed. Install Docker, start Docker, then run docker build for ${path.join(projectDir, "sandbox")}.`,
+        { cause: error }
+      );
+    }
+  }
 
   return { created: true, projectDir, configPath, databasePath };
 }

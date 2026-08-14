@@ -44,6 +44,24 @@ npm run bb -- init --name my-project --force
 
 `--force` deletes and recreates only `.big-brain/`. It does not modify files outside that directory.
 
+List the skills available in this repo:
+
+```sh
+npm run bb -- skills
+```
+
+Inspect one skill:
+
+```sh
+npm run bb -- skills show research
+```
+
+Search skills by name, description, or instructions:
+
+```sh
+npm run bb -- skills search "debug intermittent bug"
+```
+
 ## Configuration
 
 Generated config is JSON and does not store secrets. Future OpenAI calls will read credentials from `OPENAI_API_KEY`.
@@ -64,9 +82,12 @@ This repo is intentionally a single TypeScript package with app-style folders:
 - `src/cli`: Commander-based CLI entrypoints.
 - `src/core`: application services shared by CLI and future MCP adapters.
 - `src/db`: raw SQLite initialization using `better-sqlite3`.
+- `src/skills`: deterministic registry for `.agents/skills` discovery, inspection, and search.
 - `src/mcp`: reserved for the future `bb mcp` stdio server.
 - `src/workflows`: reserved for TypeScript-defined orchestration workflows.
 
 The CLI drives the product design. Future MCP tools should wrap CLI-equivalent operations rather than becoming a separate product surface.
 
 The project-local SQLite database starts with `project`, `runs`, `artifacts`, and `decisions` tables. Workflow-specific payloads use JSON text columns so the orchestration model can evolve without immediate schema churn.
+
+Skills are currently exposed as read-only project resources. Big Brain can list, show, and search `.agents/skills/*/SKILL.md` plus source metadata from `skills-lock.json`. Future MCP tools and passive background agents should use the same registry instead of reimplementing skill discovery.
