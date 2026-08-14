@@ -17,8 +17,22 @@ test("initProject scaffolds the Docker Sandbox Dockerfile", async () => {
     assert.doesNotMatch(dockerfile.toLowerCase(), /opencode/);
 });
 test("initProject attempts to build big-brain:<repo-dir-name>", async () => {
-    // Run initProject with Docker command execution observable.
-    // Assert it attempts to build image name big-brain:<repo-dir-name>.
+    const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-init-"));
+    const calls = [];
+    await initProject({
+        cwd,
+        name: "demo",
+        dockerBuild: async (...args) => {
+            calls.push(args);
+        }
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], [
+        {
+            image: `big-brain:${path.basename(cwd)}`,
+            context: path.join(cwd, ".big-brain", "sandbox")
+        }
+    ]);
 });
 test("initProject keeps .big-brain files when Docker build fails", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-init-"));

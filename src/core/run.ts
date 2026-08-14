@@ -1,7 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { BIG_BRAIN_DIR } from "./project-context.js";
+
+const execFileAsync = promisify(execFile);
 
 export type BranchStrategy = { type: "head" } | { type: "branch"; branch: string };
 
@@ -11,6 +14,7 @@ export type RunOptions = {
   prompt: string;
   branchStrategy?: BranchStrategy;
   agentCommand?: string;
+  executionMode?: "docker" | "direct";
   completionSignal?: string;
 };
 
@@ -22,6 +26,13 @@ export type RunResult = {
 };
 
 export async function run(options: RunOptions): Promise<RunResult> {
+  if (!options.name) {
+    throw new Error("run requires a name.");
+  }
+  if (!options.prompt) {
+    throw new Error("run requires an inline prompt.");
+  }
+
   const id = await allocateRunId(options.cwd, options.name);
   const runDir = path.join(options.cwd, BIG_BRAIN_DIR, "runs", id);
   const logPath = path.join(runDir, "log.txt");
@@ -32,13 +43,21 @@ export async function run(options: RunOptions): Promise<RunResult> {
   let status: "completed" | "failed" = "completed";
   let exitCode = 0;
   let log = "";
+  const events: Array<{ type: string; worktreePath?: string }> = [];
+  let preservedWorktreePath: string | null = null;
+  const startedAt = new Date().toISOString();
 
   await mkdir(runDir, { recursive: true });
-  await mkdir(executionCwd, { recursive: true });
+  if (branchStrategy.type === "branch") {
+    await ensureBranchWorktree(options.cwd, branchStrategy.branch, executionCwd);
+  } else {
+    await mkdir(executionCwd, { recursive: true });
+  }
 
   if (options.agentCommand) {
     try {
-      const output = await runCommand(executionCwd, options.agentCommand, options.prompt, options.completionSignal ?? "<promise>COMPLETE</promise>");
+      const command = options.executionMode === "direct" ? directCommand(options.agentCommand) : dockerCommand(executionCwd, options.agentCommand, options.cwd);
+      const output = await runCommand(executionCwd, command.file, command.args, options.prompt, options.completionSignal ?? "<promise>COMPLETE</promise>");
       log = output.log;
       exitCode = output.exitCode;
     } catch (error) {
@@ -49,20 +68,33 @@ export async function run(options: RunOptions): Promise<RunResult> {
     }
   }
 
+  if (status === "completed" && branchStrategy.type === "branch") {
+    if (await isWorktreeClean(executionCwd)) {
+      await execFileAsync("git", ["worktree", "remove", executionCwd], { cwd: options.cwd });
+      events.push({ type: "worktree.removed", worktreePath: path.join(BIG_BRAIN_DIR, "worktrees", sanitizeBranch(branchStrategy.branch)) });
+    } else {
+      preservedWorktreePath = path.join(BIG_BRAIN_DIR, "worktrees", sanitizeBranch(branchStrategy.branch));
+    }
+  }
+
   await writeFile(logPath, log, "utf8");
+  const completedAt = new Date().toISOString();
   await writeFile(
     resultPath,
     `${JSON.stringify(
       {
         id,
         status,
+        startedAt,
+        completedAt,
         exitCode,
         branchStrategy,
         branch: branchStrategy.type === "branch" ? branchStrategy.branch : null,
         worktreePath,
+        preservedWorktreePath,
         logPath: path.join(BIG_BRAIN_DIR, "runs", id, "log.txt"),
         commits: [],
-        events: []
+        events
       },
       null,
       2
@@ -73,13 +105,27 @@ export async function run(options: RunOptions): Promise<RunResult> {
   return { id, status, logPath, resultPath };
 }
 
+async function isWorktreeClean(worktreePath: string): Promise<boolean> {
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd: worktreePath });
+  return stdout.trim() === "";
+}
+
 function sanitizeBranch(branch: string): string {
   return branch.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
-async function runCommand(cwd: string, command: string, input: string, completionSignal: string): Promise<{ log: string; exitCode: number }> {
+async function ensureBranchWorktree(cwd: string, branch: string, worktreePath: string): Promise<void> {
+  if (await exists(worktreePath)) {
+    return;
+  }
+
+  await mkdir(path.dirname(worktreePath), { recursive: true });
+  await execFileAsync("git", ["worktree", "add", "-B", branch, worktreePath, "HEAD"], { cwd });
+}
+
+async function runCommand(cwd: string, command: string, args: string[], input: string, completionSignal: string): Promise<{ log: string; exitCode: number }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn("sh", ["-lc", command], { cwd, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let log = "";
     let completedBySignal = false;
 
@@ -102,7 +148,7 @@ async function runCommand(cwd: string, command: string, input: string, completio
       appendLog(chunk);
     });
     child.on("error", (error) => {
-      reject(Object.assign(error, { log, exitCode: 1 }));
+      reject(Object.assign(error, { log: log || error.message, exitCode: 1 }));
     });
     child.on("close", (code) => {
       if (completedBySignal) {
@@ -120,6 +166,17 @@ async function runCommand(cwd: string, command: string, input: string, completio
 
     child.stdin.end(input);
   });
+}
+
+function directCommand(command: string): { file: string; args: string[] } {
+  return { file: "sh", args: ["-lc", command] };
+}
+
+function dockerCommand(workspacePath: string, command: string, repoPath: string): { file: string; args: string[] } {
+  return {
+    file: "docker",
+    args: ["run", "--rm", "-i", "-v", `${workspacePath}:/workspace`, "-w", "/workspace", "--user", "agent", `big-brain:${path.basename(repoPath)}`, "sh", "-lc", command]
+  };
 }
 
 async function allocateRunId(cwd: string, requestedName: string): Promise<string> {

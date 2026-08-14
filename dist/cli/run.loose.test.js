@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,11 @@ const execFileAsync = promisify(execFile);
 test("bb run --agent-command passes the inline prompt via stdin", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
     await initProject({ cwd, name: "demo" });
+    const env = await fakeDockerEnv(cwd, `#!/usr/bin/env node
+let input = "";
+process.stdin.on("data", c => input += c);
+process.stdin.on("end", () => require("fs").writeFileSync("prompt.txt", input));
+`);
     await execFileAsync(process.execPath, [
         path.resolve("dist/cli/index.js"),
         "run",
@@ -19,12 +24,16 @@ test("bb run --agent-command passes the inline prompt via stdin", async () => {
         "node -e 'let input=\"\"; process.stdin.on(\"data\", c => input += c); process.stdin.on(\"end\", () => require(\"fs\").writeFileSync(\"prompt.txt\", input))'",
         "--prompt",
         "write a file"
-    ], { cwd });
+    ], { cwd, env });
     assert.equal(await readFile(path.join(cwd, "prompt.txt"), "utf8"), "write a file");
 });
 test("bb run writes log.txt and result.json under the resolved run artifact directory", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
     await initProject({ cwd, name: "demo" });
+    const env = await fakeDockerEnv(cwd, `#!/usr/bin/env node
+console.log("agent output");
+process.stdin.resume();
+`);
     await execFileAsync(process.execPath, [
         path.resolve("dist/cli/index.js"),
         "run",
@@ -34,7 +43,7 @@ test("bb run writes log.txt and result.json under the resolved run artifact dire
         "node -e 'console.log(" + JSON.stringify("agent output") + ")'",
         "--prompt",
         "write a file"
-    ], { cwd });
+    ], { cwd, env });
     const logPath = path.join(cwd, ".big-brain", "runs", "fake-test", "log.txt");
     const resultPath = path.join(cwd, ".big-brain", "runs", "fake-test", "result.json");
     const result = JSON.parse(await readFile(resultPath, "utf8"));
@@ -51,7 +60,11 @@ test("bb run writes log.txt and result.json under the resolved run artifact dire
 });
 test("bb run --branch uses branch strategy instead of head strategy", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
+    await initGitRepo(cwd);
     await initProject({ cwd, name: "demo" });
+    const env = await fakeDockerEnv(cwd, `#!/usr/bin/env node
+process.stdin.resume();
+`);
     await execFileAsync(process.execPath, [
         path.resolve("dist/cli/index.js"),
         "run",
@@ -63,11 +76,26 @@ test("bb run --branch uses branch strategy instead of head strategy", async () =
         "node -e ''",
         "--prompt",
         "write a file"
-    ], { cwd });
+    ], { cwd, env });
     const resultPath = path.join(cwd, ".big-brain", "runs", "fake-branch", "result.json");
     const result = JSON.parse(await readFile(resultPath, "utf8"));
     assert.deepEqual(result.branchStrategy, { type: "branch", branch: "agent/fake" });
 });
+async function fakeDockerEnv(cwd, script) {
+    const binDir = path.join(cwd, "bin");
+    await mkdir(binDir);
+    await writeFile(path.join(binDir, "docker"), script, "utf8");
+    await chmod(path.join(binDir, "docker"), 0o755);
+    return { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` };
+}
+async function initGitRepo(cwd) {
+    await execFileAsync("git", ["init"], { cwd });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd });
+    await execFileAsync("git", ["config", "user.name", "Test User"], { cwd });
+    await writeFile(path.join(cwd, "README.md"), "initial\n", "utf8");
+    await execFileAsync("git", ["add", "README.md"], { cwd });
+    await execFileAsync("git", ["commit", "-m", "initial"], { cwd });
+}
 test("bb run surfaces Docker installation/start instructions when Docker is unavailable", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
     await initProject({ cwd, name: "demo" });

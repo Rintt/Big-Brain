@@ -44,6 +44,29 @@ npm run bb -- init --name my-project --force
 
 `--force` deletes and recreates only `.big-brain/`. It does not modify files outside that directory.
 
+Run a first-slice agent command in the Docker Sandbox:
+
+```sh
+npm run bb -- run \
+  --name fake-test \
+  --agent-command "node -e 'const fs = require(\"fs\"); fs.writeFileSync(\"agent-output.txt\", \"ok\")'" \
+  --prompt "write a file"
+```
+
+Run against an internal branch worktree instead of the current working tree:
+
+```sh
+npm run bb -- run \
+  --name fake-branch \
+  --branch agent/fake \
+  --agent-command "node -e 'const fs = require(\"fs\"); fs.writeFileSync(\"agent-output.txt\", \"ok\")'" \
+  --prompt "write a file"
+```
+
+The first slice runs caller-provided `--agent-command` values. OpenCode image support is deferred; the default Docker image does not install OpenCode. Library callers using `opencode()` must provide a Docker image with OpenCode installed.
+
+Runs currently produce file artifacts under `.big-brain/runs/<run-name>/`, including `log.txt` and `result.json`, not SQLite rows.
+
 List the skills available in this repo:
 
 ```sh

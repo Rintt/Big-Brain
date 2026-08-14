@@ -10,6 +10,7 @@ export type RunOptions = {
     prompt: string;
     branchStrategy?: BranchStrategy;
     agentCommand?: string;
+    executionMode?: "docker" | "direct";
     completionSignal?: string;
 };
 export type RunResult = {

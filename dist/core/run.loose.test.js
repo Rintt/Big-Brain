@@ -1,10 +1,13 @@
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { promisify } from "node:util";
 import { initProject } from "./project-context.js";
 import { run } from "./run.js";
+const execFileAsync = promisify(execFile);
 test("run() in head mode runs a Docker fake agent and writes to the current working tree", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-run-"));
     await initProject({ cwd, name: "demo" });
@@ -12,6 +15,7 @@ test("run() in head mode runs a Docker fake agent and writes to the current work
         cwd,
         name: "head-fake",
         prompt: "write a file",
+        executionMode: "direct",
         agentCommand: "node -e 'const fs = require(\"fs\"); fs.writeFileSync(\"agent-output.txt\", \"ok\")'"
     });
     assert.equal(await readFile(path.join(cwd, "agent-output.txt"), "utf8"), "ok");
@@ -22,12 +26,14 @@ test("run() in head mode runs a Docker fake agent and writes to the current work
 });
 test("run() in branch mode runs a Docker fake agent inside an internal worktree", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-run-"));
+    await initGitRepo(cwd);
     await initProject({ cwd, name: "demo" });
     await run({
         cwd,
         name: "branch-fake",
         prompt: "write a file",
         branchStrategy: { type: "branch", branch: "agent/fake" },
+        executionMode: "direct",
         agentCommand: "node -e 'const fs = require(\"fs\"); fs.writeFileSync(\"agent-output.txt\", \"ok\")'"
     });
     await assert.rejects(readFile(path.join(cwd, "agent-output.txt"), "utf8"), { code: "ENOENT" });
@@ -38,10 +44,39 @@ test("run() in branch mode runs a Docker fake agent inside an internal worktree"
     assert.equal(resultJson.worktreePath, path.join(".big-brain", "worktrees", "agent-fake"));
 });
 test("run() reuses an existing branch worktree", async () => {
-    // Arrange an existing .big-brain/worktrees/agent-fake worktree.
-    // Run another branch Run against branch "agent/fake".
-    // Assert the existing worktree path is reused rather than suffixed or recreated elsewhere.
+    const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-run-"));
+    await initGitRepo(cwd);
+    await initProject({ cwd, name: "demo" });
+    await run({
+        cwd,
+        name: "first-branch-run",
+        prompt: "write a file",
+        branchStrategy: { type: "branch", branch: "agent/fake" },
+        executionMode: "direct",
+        agentCommand: "node -e 'require(\"fs\").writeFileSync(\"first.txt\", \"ok\")'"
+    });
+    const worktreePath = path.join(cwd, ".big-brain", "worktrees", "agent-fake");
+    const worktreeGitDir = (await execFileAsync("git", ["rev-parse", "--git-dir"], { cwd: worktreePath })).stdout.trim();
+    await run({
+        cwd,
+        name: "second-branch-run",
+        prompt: "write another file",
+        branchStrategy: { type: "branch", branch: "agent/fake" },
+        executionMode: "direct",
+        agentCommand: "node -e 'require(\"fs\").writeFileSync(\"second.txt\", \"ok\")'"
+    });
+    assert.equal((await execFileAsync("git", ["rev-parse", "--git-dir"], { cwd: worktreePath })).stdout.trim(), worktreeGitDir);
+    assert.equal(await readFile(path.join(worktreePath, "first.txt"), "utf8"), "ok");
+    assert.equal(await readFile(path.join(worktreePath, "second.txt"), "utf8"), "ok");
 });
+async function initGitRepo(cwd) {
+    await execFileAsync("git", ["init"], { cwd });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd });
+    await execFileAsync("git", ["config", "user.name", "Test User"], { cwd });
+    await writeFile(path.join(cwd, "README.md"), "initial\n", "utf8");
+    await execFileAsync("git", ["add", "README.md"], { cwd });
+    await execFileAsync("git", ["commit", "-m", "initial"], { cwd });
+}
 test("run() kills the agent process immediately when the completion signal appears", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-run-"));
     await initProject({ cwd, name: "demo" });
@@ -50,6 +85,7 @@ test("run() kills the agent process immediately when the completion signal appea
         cwd,
         name: "complete-fast",
         prompt: "finish",
+        executionMode: "direct",
         agentCommand: "node -e 'console.log(\"<promise>COMPLETE</promise>\"); setTimeout(() => {}, 10000)'"
     });
     assert.equal(result.status, "completed");
@@ -67,7 +103,14 @@ test("run() allocates a numeric suffix when the requested run name already exist
     assert.equal(resultJson.status, "completed");
 });
 test("run() reports actionable Docker availability errors", async () => {
-    // Simulate docker being missing or unavailable.
-    // Assert the error tells the user Docker must be installed/running and does not fall back silently.
+    const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-run-"));
+    const result = await run({
+        cwd,
+        name: "docker-unavailable",
+        prompt: "write a file",
+        agentCommand: "node -e ''"
+    });
+    assert.equal(result.status, "failed");
+    assert.match(await readFile(path.join(cwd, ".big-brain", "runs", "docker-unavailable", "log.txt"), "utf8"), /Docker must be installed|Docker daemon|spawn docker ENOENT/i);
 });
 //# sourceMappingURL=run.loose.test.js.map

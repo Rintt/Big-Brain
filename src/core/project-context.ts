@@ -25,7 +25,7 @@ export type InitProjectOptions = {
   name: string;
   force?: boolean;
   now?: Date;
-  dockerBuild?: () => Promise<void>;
+  dockerBuild?: (request: { image: string; context: string }) => Promise<void>;
 };
 
 export type InitProjectResult = {
@@ -82,7 +82,7 @@ export async function initProject(options: InitProjectOptions): Promise<InitProj
 
   if (options.dockerBuild) {
     try {
-      await options.dockerBuild();
+      await options.dockerBuild({ image: `big-brain:${path.basename(options.cwd)}`, context: path.join(projectDir, "sandbox") });
     } catch (error) {
       throw new Error(
         `Docker build failed. Install Docker, start Docker, then run docker build for ${path.join(projectDir, "sandbox")}.`,

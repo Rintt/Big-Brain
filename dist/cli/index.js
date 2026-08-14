@@ -42,7 +42,7 @@ export function createCli() {
         const result = await run({ cwd: process.cwd(), name: options.name, branchStrategy, agentCommand: options.agentCommand, prompt: options.prompt });
         if (result.status === "failed") {
             const log = await readFile(result.logPath, "utf8");
-            if (/docker: not found|cannot connect to the docker daemon|is the docker daemon running/i.test(log)) {
+            if (/docker: not found|spawn docker ENOENT|cannot connect to the docker daemon|is the docker daemon running/i.test(log)) {
                 console.error("Docker must be installed and running to use bb run with the Docker Sandbox.");
             }
             process.exitCode = 1;
