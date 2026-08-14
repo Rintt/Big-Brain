@@ -13,8 +13,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends git \
   && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --gid 1000 agent \
-  && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh agent
+RUN npm install -g opencode-ai@1.18.18
+
+RUN if getent group 1000 >/dev/null; then groupmod --new-name agent "$(getent group 1000 | cut -d: -f1)"; else groupadd --gid 1000 agent; fi \
+  && if id -u 1000 >/dev/null 2>&1; then usermod --login agent --home /home/agent --move-home --shell /bin/sh "$(getent passwd 1000 | cut -d: -f1)"; else useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh agent; fi
 
 WORKDIR /workspace
 USER agent
@@ -43,6 +45,8 @@ export class AlreadyInitializedError extends Error {
 }
 
 export async function initProject(options: InitProjectOptions): Promise<InitProjectResult> {
+  assertSupportedWorkspacePath(options.cwd);
+
   const projectDir = path.join(options.cwd, BIG_BRAIN_DIR);
   const configPath = path.join(projectDir, CONFIG_FILE);
   const databasePath = path.join(projectDir, DB_FILE);
@@ -68,6 +72,7 @@ export async function initProject(options: InitProjectOptions): Promise<InitProj
     bigBrainVersion: packageVersion,
     createdAt,
     defaultModel: "gpt-5.5",
+    dockerImage: `big-brain:${path.basename(options.cwd)}`,
     paths: {
       database: `${BIG_BRAIN_DIR}/${DB_FILE}`,
       runs: `${BIG_BRAIN_DIR}/runs`,
@@ -82,7 +87,7 @@ export async function initProject(options: InitProjectOptions): Promise<InitProj
 
   if (options.dockerBuild) {
     try {
-      await options.dockerBuild({ image: `big-brain:${path.basename(options.cwd)}`, context: path.join(projectDir, "sandbox") });
+      await options.dockerBuild({ image: config.dockerImage, context: path.join(projectDir, "sandbox") });
     } catch (error) {
       throw new Error(
         `Docker build failed. Install Docker, start Docker, then run docker build for ${path.join(projectDir, "sandbox")}.`,
@@ -92,6 +97,14 @@ export async function initProject(options: InitProjectOptions): Promise<InitProj
   }
 
   return { created: true, projectDir, configPath, databasePath };
+}
+
+function assertSupportedWorkspacePath(cwd: string): void {
+  if (path.normalize(cwd).startsWith("/mnt/wsl/docker-desktop-bind-mounts/")) {
+    throw new Error(
+      "Big Brain must be initialized from the real repo path, not Docker Desktop's bind-mount path. Use the /mnt/c/... repo path instead."
+    );
+  }
 }
 
 async function exists(targetPath: string): Promise<boolean> {

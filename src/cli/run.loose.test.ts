@@ -151,7 +151,7 @@ test("bb run surfaces Docker installation/start instructions when Docker is unav
         "--prompt",
         "write a file"
       ],
-      { cwd, env: { ...process.env, PATH: "/bin" } }
+      { cwd, env: { ...process.env, PATH: path.join(cwd, "missing-bin") } }
     );
   } catch (caught) {
     error = caught;
@@ -159,4 +159,107 @@ test("bb run surfaces Docker installation/start instructions when Docker is unav
 
   assert.ok(error instanceof Error);
   assert.match(String((error as { stderr?: string }).stderr), /Docker must be installed and running/i);
+});
+
+test("bb run reports a missing Big Brain Docker image separately from Docker availability", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
+  await initProject({ cwd, name: "demo" });
+  const env = await fakeDockerEnv(cwd, `#!/usr/bin/env node
+console.error("Unable to find image 'big-brain:missing' locally");
+console.error("docker: Error response from daemon: pull access denied for big-brain, repository does not exist or may require 'docker login'");
+process.exit(125);
+`);
+
+  await assert.rejects(
+    execFileAsync(
+      process.execPath,
+      [path.resolve("dist/cli/index.js"), "run", "--name", "missing-image", "--agent-command", "node -e ''", "--prompt", "write a file"],
+      { cwd, env }
+    ),
+    (error: unknown) => {
+      const stderr = String((error as { stderr?: string }).stderr);
+      assert.match(stderr, /Docker image big-brain:missing was not found/i);
+      assert.doesNotMatch(stderr, /Docker must be installed and running/i);
+      return true;
+    }
+  );
+});
+
+test("bb run explains hash-like Docker image tags from Docker Desktop bind mounts", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
+  await initProject({ cwd, name: "demo" });
+  const configPath = path.join(cwd, ".big-brain", "config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  const image = "big-brain:d9a73214bbc9a3689d19ced58d56d607daa0ab7ce9079025d6bbee7176bfd26b";
+  await writeFile(configPath, `${JSON.stringify({ ...config, dockerImage: image }, null, 2)}\n`, "utf8");
+  const env = await fakeDockerEnv(cwd, `#!/usr/bin/env node
+console.error("Unable to find image '${image}' locally");
+console.error("docker: Error response from daemon: pull access denied for big-brain, repository does not exist or may require 'docker login'");
+process.exit(125);
+`);
+
+  await assert.rejects(
+    execFileAsync(
+      process.execPath,
+      [path.resolve("dist/cli/index.js"), "run", "--name", "hash-image", "--agent-command", "node -e ''", "--prompt", "write a file"],
+      { cwd, env }
+    ),
+    (error: unknown) => {
+      const stderr = String((error as { stderr?: string }).stderr);
+      assert.match(stderr, /Docker Desktop.*bind-mount/i);
+      assert.match(stderr, /real repo path/i);
+      return true;
+    }
+  );
+});
+
+test("bb run uses the Docker image recorded in project config", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
+  await initProject({ cwd, name: "demo" });
+  const configPath = path.join(cwd, ".big-brain", "config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  await writeFile(configPath, `${JSON.stringify({ ...config, dockerImage: "big-brain:configured" }, null, 2)}\n`, "utf8");
+  const dockerLogPath = path.join(cwd, "docker-argv.json");
+  const env = await fakeDockerEnv(cwd, `#!/usr/bin/env node
+require("node:fs").writeFileSync(process.env.BB_FAKE_DOCKER_LOG, JSON.stringify(process.argv.slice(2)));
+process.stdin.resume();
+`);
+
+  await execFileAsync(
+    process.execPath,
+    [path.resolve("dist/cli/index.js"), "run", "--name", "configured-image", "--agent-command", "node -e ''", "--prompt", "write a file"],
+    { cwd, env: { ...env, BB_FAKE_DOCKER_LOG: dockerLogPath } }
+  );
+
+  const dockerArgs = JSON.parse(await readFile(dockerLogPath, "utf8")) as string[];
+  assert.equal(dockerArgs.includes("big-brain:configured"), true);
+});
+
+test("bb reset reinstalls a clean .big-brain using the existing project name", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
+  await initProject({ cwd, name: "demo" });
+  await mkdir(path.join(cwd, ".big-brain", "runs", "old-run"), { recursive: true });
+  await writeFile(path.join(cwd, ".big-brain", "runs", "old-run", "log.txt"), "old", "utf8");
+  await writeFile(path.join(cwd, "outside.txt"), "keep", "utf8");
+
+  await execFileAsync(process.execPath, [path.resolve("dist/cli/index.js"), "reset"], { cwd });
+
+  const config = JSON.parse(await readFile(path.join(cwd, ".big-brain", "config.json"), "utf8"));
+  assert.equal(config.projectName, "demo");
+  assert.equal(config.dockerImage, `big-brain:${path.basename(cwd)}`);
+  assert.equal(await readFile(path.join(cwd, "outside.txt"), "utf8"), "keep");
+  await assert.rejects(readFile(path.join(cwd, ".big-brain", "runs", "old-run", "log.txt"), "utf8"), { code: "ENOENT" });
+});
+
+test("bb reset requires --name when no existing project config exists", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-cli-"));
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.resolve("dist/cli/index.js"), "reset"], { cwd }),
+    (error: unknown) => {
+      assert.match(String((error as { stderr?: string }).stderr), /requires --name/i);
+      return true;
+    }
+  );
+  await assert.rejects(readFile(path.join(cwd, ".big-brain", "config.json"), "utf8"), { code: "ENOENT" });
 });

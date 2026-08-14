@@ -3,13 +3,13 @@ import path from "node:path";
 export type DockerSandboxProvider = {
   type: "docker";
   image: string;
-  installsOpenCode: false;
+  installsOpenCode: true;
 };
 
 export function docker(): DockerSandboxProvider {
   return {
     type: "docker",
     image: `big-brain:${path.basename(process.cwd())}`,
-    installsOpenCode: false
+    installsOpenCode: true
   };
 }

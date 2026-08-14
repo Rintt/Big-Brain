@@ -17,7 +17,7 @@ test("package root exports run and opencode", async () => {
 
   assert.equal(typeof root.run, "function");
   assert.equal(typeof root.opencode, "function");
-  assert.deepEqual((root.opencode as () => unknown)(), { type: "opencode" });
+  assert.deepEqual((root.opencode as () => unknown)(), { type: "opencode", command: "opencode run --format json --model openai/gpt-5.5" });
 });
 
 test("docker sandbox export describes the default Docker Sandbox", async () => {
@@ -29,7 +29,7 @@ test("docker sandbox export describes the default Docker Sandbox", async () => {
   assert.deepEqual((sandbox.docker as () => unknown)(), {
     type: "docker",
     image: `big-brain:${path.basename(process.cwd())}`,
-    installsOpenCode: false
+    installsOpenCode: true
   });
 });
 
@@ -216,6 +216,6 @@ test("README documents first-slice usage and deferred features", async () => {
 
   assert.match(readme, /bb -- run[\s\S]*--name[\s\S]*--agent-command[\s\S]*--prompt/);
   assert.match(readme, /--branch[\s\S]*agent\/fake/);
-  assert.match(readme, /OpenCode[\s\S]*deferred/i);
+  assert.match(readme, /opencode-ai@1\.18\.18/i);
   assert.match(readme, /file artifacts[\s\S]*not SQLite/i);
 });

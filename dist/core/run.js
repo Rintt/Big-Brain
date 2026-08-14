@@ -21,6 +21,7 @@ export async function run(options) {
     let status = "completed";
     let exitCode = 0;
     let log = "";
+    let finalOutput = null;
     const events = [];
     let preservedWorktreePath = null;
     const startedAt = new Date().toISOString();
@@ -33,16 +34,18 @@ export async function run(options) {
     }
     if (options.agentCommand) {
         try {
-            const command = options.executionMode === "direct" ? directCommand(options.agentCommand) : dockerCommand(executionCwd, options.agentCommand, options.cwd);
+            const command = options.executionMode === "direct" ? directCommand(options.agentCommand) : dockerCommand(executionCwd, options.agentCommand, await dockerImage(options.cwd), options.environmentVariables ?? []);
             const output = await runCommand(executionCwd, command.file, command.args, options.prompt, options.completionSignal ?? "<promise>COMPLETE</promise>");
             log = output.log;
             exitCode = output.exitCode;
+            finalOutput = extractFinalOutput(log);
         }
         catch (error) {
             const failed = error;
             status = "failed";
             exitCode = failed.exitCode ?? 1;
-            log = failed.log ?? "";
+            log = withActionableAgentMessage(withActionableDockerMessage(failed.log ?? ""));
+            finalOutput = extractFinalOutput(log);
         }
     }
     if (status === "completed" && branchStrategy.type === "branch") {
@@ -67,6 +70,7 @@ export async function run(options) {
         worktreePath,
         preservedWorktreePath,
         logPath: path.join(BIG_BRAIN_DIR, "runs", id, "log.txt"),
+        finalOutput,
         commits: [],
         events
     }, null, 2)}\n`, "utf8");
@@ -128,11 +132,118 @@ async function runCommand(cwd, command, args, input, completionSignal) {
 function directCommand(command) {
     return { file: "sh", args: ["-lc", command] };
 }
-function dockerCommand(workspacePath, command, repoPath) {
+function dockerCommand(workspacePath, command, image, environmentVariables) {
+    const environmentArgs = environmentVariables.flatMap((name) => ["-e", name]);
     return {
         file: "docker",
-        args: ["run", "--rm", "-i", "-v", `${workspacePath}:/workspace`, "-w", "/workspace", "--user", "agent", `big-brain:${path.basename(repoPath)}`, "sh", "-lc", command]
+        args: ["run", "--rm", "-i", ...environmentArgs, "-v", `${workspacePath}:/workspace`, "-w", "/workspace", "--user", "agent", image, "sh", "-lc", command]
     };
+}
+function extractFinalOutput(log) {
+    let finalOutput = null;
+    for (const line of log.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("{")) {
+            continue;
+        }
+        try {
+            const event = JSON.parse(trimmed);
+            const candidate = assistantTextFromJson(event);
+            if (candidate !== null && candidate.trim().length > 0) {
+                finalOutput = candidate.trim();
+            }
+        }
+        catch {
+            // OpenCode JSON events are best-effort; raw log remains canonical.
+        }
+    }
+    return finalOutput;
+}
+function assistantTextFromJson(value) {
+    if (!isRecord(value)) {
+        return null;
+    }
+    if (value.role === "assistant") {
+        return textContent(value.content) ?? textContent(value.text) ?? textContent(value.message);
+    }
+    if (isRecord(value.message) && value.message.role === "assistant") {
+        return textContent(value.message.content) ?? textContent(value.message.text);
+    }
+    if (typeof value.type === "string" && /assistant|message|response|text/i.test(value.type)) {
+        return textContent(value.content) ?? textContent(value.text) ?? textContent(value.output);
+    }
+    return null;
+}
+function textContent(value) {
+    if (typeof value === "string") {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        const parts = value.map((part) => {
+            if (typeof part === "string") {
+                return part;
+            }
+            if (isRecord(part)) {
+                return textContent(part.text) ?? textContent(part.content);
+            }
+            return null;
+        }).filter((part) => part !== null && part.length > 0);
+        return parts.length > 0 ? parts.join("") : null;
+    }
+    if (isRecord(value)) {
+        return textContent(value.text) ?? textContent(value.content);
+    }
+    return null;
+}
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+async function dockerImage(cwd) {
+    try {
+        const config = JSON.parse(await readFile(path.join(cwd, BIG_BRAIN_DIR, "config.json"), "utf8"));
+        if (typeof config.dockerImage === "string" && config.dockerImage.length > 0) {
+            return config.dockerImage;
+        }
+    }
+    catch (error) {
+        if (error.code !== "ENOENT") {
+            throw error;
+        }
+    }
+    return `big-brain:${path.basename(cwd)}`;
+}
+function withActionableDockerMessage(log) {
+    const missingImage = missingDockerImage(log);
+    if (missingImage !== null) {
+        return `${log}${log.endsWith("\n") || log.length === 0 ? "" : "\n"}${missingDockerImageMessage(missingImage)}\n`;
+    }
+    if (/docker: not found|spawn docker ENOENT|cannot connect to the docker daemon|is the docker daemon running|permission denied while trying to connect to the docker api/i.test(log)) {
+        return `${log}${log.endsWith("\n") || log.length === 0 ? "" : "\n"}Docker must be installed and running to use the Docker Sandbox. If the Big Brain Docker image is missing, run bb init or build the configured image.\n`;
+    }
+    return log;
+}
+function missingDockerImageMessage(image) {
+    const baseMessage = `Docker image ${image} was not found.`;
+    if (/^big-brain:[a-f0-9]{64}$/i.test(image)) {
+        return `${baseMessage} This looks like a tag created from Docker Desktop's bind-mount path; run Big Brain from the real repo path and set dockerImage in .big-brain/config.json to the image you built.`;
+    }
+    return `${baseMessage} Run bb init or build .big-brain/sandbox/Dockerfile with that tag.`;
+}
+function missingDockerImage(log) {
+    const missingLocalImage = log.match(/Unable to find image '([^']+)' locally/i);
+    if (missingLocalImage !== null) {
+        return missingLocalImage[1];
+    }
+    if (/pull access denied for big-brain|repository does not exist/i.test(log)) {
+        return "big-brain:<repo-dir-name>";
+    }
+    return null;
+}
+function withActionableAgentMessage(log) {
+    if (/opencode: not found|opencode.*not found/i.test(log)) {
+        return `${log}${log.endsWith("\n") || log.length === 0 ? "" : "\n"}OpenCode is missing from the Docker image. Build or choose a Docker image with OpenCode installed.\n`;
+    }
+    return log;
 }
 async function allocateRunId(cwd, requestedName) {
     if (!(await exists(path.join(cwd, BIG_BRAIN_DIR, "runs", requestedName)))) {

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
+import { opencode } from "../index.js";
 import { AlreadyInitializedError, initProject } from "../core/project-context.js";
 import type { BranchStrategy } from "../core/run.js";
 import { run } from "../core/run.js";
@@ -36,19 +38,67 @@ export function createCli(): Command {
     });
 
   program
+    .command("reset")
+    .description("Reinstall a clean .big-brain directory while preserving files outside it")
+    .option("--name <name>", "Project name; defaults to the existing .big-brain config projectName")
+    .action(async (options: { name?: string }) => {
+      const name = options.name ?? (await readExistingProjectName(process.cwd()));
+      if (name === undefined) {
+        console.error("bb reset requires --name when no existing .big-brain/config.json projectName can be read.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = await initProject({ cwd: process.cwd(), name, force: true });
+      console.log(`Reset Big Brain project context at ${result.projectDir}`);
+    });
+
+  program
     .command("run")
     .description("Run an agent command")
     .requiredOption("--name <name>", "Run name")
     .option("--branch <branch>", "Run in an internal worktree for the named branch")
-    .requiredOption("--agent-command <command>", "Agent command to execute")
+    .option("--agent <agent>", "Agent Provider to execute")
+    .option("--agent-command <command>", "Agent command to execute")
     .requiredOption("--prompt <prompt>", "Prompt to pass to the agent via stdin")
-    .action(async (options: { name: string; branch?: string; agentCommand: string; prompt: string }) => {
+    .action(async (options: { name: string; branch?: string; agent?: string; agentCommand?: string; prompt: string }) => {
+      if ((options.agent === undefined) === (options.agentCommand === undefined)) {
+        console.error("bb run requires exactly one of --agent or --agent-command.");
+        process.exitCode = 1;
+        return;
+      }
+
+      let agentCommand = options.agentCommand;
+      let environmentVariables: string[] | undefined;
+      if (options.agent !== undefined) {
+        if (options.agent !== "opencode") {
+          console.error(`Unsupported agent: ${options.agent}`);
+          process.exitCode = 1;
+          return;
+        }
+        const apiKey = await readOpenAiApiKey(process.cwd());
+        if (apiKey === undefined) {
+          console.error("OPENAI_API_KEY is required for --agent opencode. Set it in the environment or put it in openapi.pem.");
+          process.exitCode = 1;
+          return;
+        }
+        process.env.OPENAI_API_KEY = apiKey;
+        agentCommand = opencode().command;
+        environmentVariables = ["OPENAI_API_KEY"];
+      }
+
       const branchStrategy: BranchStrategy | undefined = options.branch === undefined ? undefined : { type: "branch", branch: options.branch };
-      const result = await run({ cwd: process.cwd(), name: options.name, branchStrategy, agentCommand: options.agentCommand, prompt: options.prompt });
+      const result = await run({ cwd: process.cwd(), name: options.name, branchStrategy, agentCommand, environmentVariables, prompt: options.prompt });
       if (result.status === "failed") {
         const log = await readFile(result.logPath, "utf8");
-        if (/docker: not found|spawn docker ENOENT|cannot connect to the docker daemon|is the docker daemon running/i.test(log)) {
+        const missingImageMessage = log.match(/Docker image .* was not found\.[^\n]*/i)?.[0];
+        if (missingImageMessage !== undefined) {
+          console.error(missingImageMessage);
+        } else if (/docker: not found|spawn docker ENOENT|cannot connect to the docker daemon|is the docker daemon running|permission denied while trying to connect to the docker api|Docker must be installed and running/i.test(log)) {
           console.error("Docker must be installed and running to use bb run with the Docker Sandbox.");
+        }
+        if (/OpenCode is missing from the Docker image/i.test(log)) {
+          console.error("OpenCode is missing from the Docker image. Build or choose a Docker image with OpenCode installed.");
         }
         process.exitCode = 1;
       }
@@ -126,6 +176,34 @@ export function createCli(): Command {
     });
 
   return program;
+}
+
+async function readExistingProjectName(cwd: string): Promise<string | undefined> {
+  try {
+    const config = JSON.parse(await readFile(`${cwd}/.big-brain/config.json`, "utf8")) as { projectName?: unknown };
+    return typeof config.projectName === "string" && config.projectName.length > 0 ? config.projectName : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function readOpenAiApiKey(cwd: string): Promise<string | undefined> {
+  if (typeof process.env.OPENAI_API_KEY === "string" && process.env.OPENAI_API_KEY.trim().length > 0) {
+    return process.env.OPENAI_API_KEY.trim();
+  }
+
+  try {
+    const apiKey = (await readFile(path.join(cwd, "openapi.pem"), "utf8")).trim();
+    return apiKey.length > 0 ? apiKey : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 await createCli().parseAsync(process.argv);

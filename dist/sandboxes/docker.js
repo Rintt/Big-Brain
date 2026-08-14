@@ -3,7 +3,7 @@ export function docker() {
     return {
         type: "docker",
         image: `big-brain:${path.basename(process.cwd())}`,
-        installsOpenCode: false
+        installsOpenCode: true
     };
 }
 //# sourceMappingURL=docker.js.map

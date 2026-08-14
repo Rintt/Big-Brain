@@ -11,7 +11,7 @@ test("package root exports run and opencode", async () => {
     const root = (await import(pathToFileURL(path.join(process.cwd(), "dist", "index.js")).href));
     assert.equal(typeof root.run, "function");
     assert.equal(typeof root.opencode, "function");
-    assert.deepEqual(root.opencode(), { type: "opencode" });
+    assert.deepEqual(root.opencode(), { type: "opencode", command: "opencode run --format json --model openai/gpt-5.5" });
 });
 test("docker sandbox export describes the default Docker Sandbox", async () => {
     const sandbox = (await import(pathToFileURL(path.join(process.cwd(), "dist", "sandboxes", "docker.js")).href));
@@ -19,7 +19,7 @@ test("docker sandbox export describes the default Docker Sandbox", async () => {
     assert.deepEqual(sandbox.docker(), {
         type: "docker",
         image: `big-brain:${path.basename(process.cwd())}`,
-        installsOpenCode: false
+        installsOpenCode: true
     });
 });
 test("bb run executes the agent command through Docker with the repo mounted at /workspace", async () => {
@@ -153,7 +153,7 @@ test("README documents first-slice usage and deferred features", async () => {
     const readme = await readFile(path.join(process.cwd(), "README.md"), "utf8");
     assert.match(readme, /bb -- run[\s\S]*--name[\s\S]*--agent-command[\s\S]*--prompt/);
     assert.match(readme, /--branch[\s\S]*agent\/fake/);
-    assert.match(readme, /OpenCode[\s\S]*deferred/i);
+    assert.match(readme, /opencode-ai@1\.18\.18/i);
     assert.match(readme, /file artifacts[\s\S]*not SQLite/i);
 });
 //# sourceMappingURL=next-round.loose.test.js.map

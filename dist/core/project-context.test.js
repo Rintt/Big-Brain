@@ -19,6 +19,7 @@ test("initProject creates structured project context", async () => {
     assert.equal(config.bigBrainVersion, "0.1.0");
     assert.equal(config.createdAt, now.toISOString());
     assert.equal(config.defaultModel, "gpt-5.5");
+    assert.equal(config.dockerImage, `big-brain:${path.basename(cwd)}`);
     assert.deepEqual(config.paths, {
         database: ".big-brain/big-brain.sqlite",
         runs: ".big-brain/runs",
@@ -40,6 +41,12 @@ test("initProject refuses an existing project context without force", async () =
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-init-"));
     await initProject({ cwd, name: "demo" });
     await assert.rejects(initProject({ cwd, name: "demo" }), (error) => error instanceof AlreadyInitializedError && error.message.includes("--force"));
+});
+test("initProject rejects Docker Desktop bind-mount paths", async () => {
+    await assert.rejects(initProject({
+        cwd: "/mnt/wsl/docker-desktop-bind-mounts/Ubuntu/d9a73214bbc9a3689d19ced58d56d607daa0ab7ce9079025d6bbee7176bfd26b",
+        name: "demo"
+    }), /real repo path|Docker Desktop.*bind-mount/i);
 });
 test("initProject force regenerates only the .big-brain directory", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-init-"));

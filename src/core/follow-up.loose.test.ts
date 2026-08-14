@@ -43,7 +43,7 @@ require("node:fs").writeFileSync(process.env.BB_FAKE_DOCKER_LOG, JSON.stringify(
   }
 });
 
-test("bb run requires --name, --prompt, and --agent-command", async () => {
+test("bb run requires --name, --prompt, and an agent selection", async () => {
   for (const args of [
     ["run", "--agent-command", "node -e ''", "--prompt", "write a file"],
     ["run", "--name", "missing-prompt", "--agent-command", "node -e ''"],
@@ -52,7 +52,7 @@ test("bb run requires --name, --prompt, and --agent-command", async () => {
     await assert.rejects(
       execFileAsync(process.execPath, [path.resolve("dist/cli/index.js"), ...args]),
       (error: unknown) => {
-        assert.match(String((error as { stderr?: string }).stderr), /required option/i);
+        assert.match(String((error as { stderr?: string }).stderr), /required option|exactly one of --agent or --agent-command/i);
         return true;
       }
     );

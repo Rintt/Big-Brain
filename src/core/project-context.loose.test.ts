@@ -14,10 +14,13 @@ test("initProject scaffolds the Docker Sandbox Dockerfile", async () => {
   assert.match(dockerfile, /^FROM node:22-bookworm-slim$/m);
   assert.match(dockerfile, /apt-get update/);
   assert.match(dockerfile, /apt-get install[^\n]*git/);
+  assert.match(dockerfile, /getent group 1000/);
+  assert.match(dockerfile, /npm install -g opencode-ai@1\.18\.18/);
   assert.match(dockerfile, /groupadd[^\n]*--gid 1000[^\n]*agent/);
+  assert.match(dockerfile, /id -u 1000/);
+  assert.match(dockerfile, /usermod[^\n]*--login agent/);
   assert.match(dockerfile, /useradd[^\n]*--uid 1000[^\n]*--gid 1000[^\n]*agent/);
   assert.match(dockerfile, /^USER agent$/m);
-  assert.doesNotMatch(dockerfile.toLowerCase(), /opencode/);
 });
 
 test("initProject attempts to build big-brain:<repo-dir-name>", async () => {

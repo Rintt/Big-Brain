@@ -104,13 +104,20 @@ test("run() allocates a numeric suffix when the requested run name already exist
 });
 test("run() reports actionable Docker availability errors", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "big-brain-run-"));
-    const result = await run({
-        cwd,
-        name: "docker-unavailable",
-        prompt: "write a file",
-        agentCommand: "node -e ''"
-    });
-    assert.equal(result.status, "failed");
-    assert.match(await readFile(path.join(cwd, ".big-brain", "runs", "docker-unavailable", "log.txt"), "utf8"), /Docker must be installed|Docker daemon|spawn docker ENOENT/i);
+    const originalPath = process.env.PATH;
+    try {
+        process.env.PATH = path.join(cwd, "missing-bin");
+        const result = await run({
+            cwd,
+            name: "docker-unavailable",
+            prompt: "write a file",
+            agentCommand: "node -e ''"
+        });
+        assert.equal(result.status, "failed");
+        assert.match(await readFile(path.join(cwd, ".big-brain", "runs", "docker-unavailable", "log.txt"), "utf8"), /Docker must be installed|Docker daemon|spawn docker ENOENT|permission denied/i);
+    }
+    finally {
+        process.env.PATH = originalPath;
+    }
 });
 //# sourceMappingURL=run.loose.test.js.map

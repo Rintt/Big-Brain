@@ -1,6 +1,6 @@
 export type DockerSandboxProvider = {
     type: "docker";
     image: string;
-    installsOpenCode: false;
+    installsOpenCode: true;
 };
 export declare function docker(): DockerSandboxProvider;
